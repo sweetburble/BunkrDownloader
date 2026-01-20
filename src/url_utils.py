@@ -19,16 +19,27 @@ from .config import (
     MEDIA_SLUG_REGEX,
     URL_TYPE_MAPPING,
     VALID_SLUG_REGEX,
+    SkippedReason,
 )
 
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
+
+    from src.managers.live_manager import LiveManager
 
 
 def get_host_page(url: str) -> str:
     """Extract the base host URL from a given URL."""
     url_netloc = urlparse(url).netloc
     return f"https://{url_netloc}"
+
+
+def add_https_prefix(url: str) -> str:
+    """Add the 'https://' prefix to the provided URL if it is not already present."""
+    if not url.startswith("https://"):
+        return f"https://{url}"
+
+    return url
 
 
 def replace_domain_with_fallback(url: str) -> str:
@@ -53,6 +64,18 @@ def check_url_type(url: str) -> bool:
     log_message = f"Invalid URL format for: {url}. Unexpected URL type '{url_type}'."
     logging.warning(log_message)
     sys.exit(1)
+
+
+def log_unavailable_url(live_manager: LiveManager, url: str) -> None:
+    """Log the unavailability of the specified URL.
+
+    This function is called when the page cannot be fetched or is unavailable.
+    """
+    live_manager.update_log(
+        event="Service unavailable",
+        details=f"The URL {url} is currently unavailable. Try again later.",
+    )
+    live_manager.progress_manager.update_result(SkippedReason.SERVICE_UNAVAILABLE)
 
 
 def get_identifier(url: str, soup: BeautifulSoup | None = None) -> str:
