@@ -1,0 +1,30 @@
+# BunkrDownloader 설정 파일
+# 이 파일에서 모든 다운로드 옵션을 관리할 수 있습니다
+
+# 다운로드할 URL (필수)
+url: https://bunkr.cr/a/maa3ferV
+
+# 다운로드 경로 설정
+download:
+    custom_path: D:\실사\temp # 기본값은 Downloads 폴더 사용, 경로 지정 시: "/download"가 추가됨
+
+# 필터 설정
+filters:
+    # 이 문자열들을 포함한 파일은 건너뜁니다
+    ignore:
+        - .txt
+        - .html
+        - .ini
+        - aduhaymantap
+        - Afr-vA5AESH
+
+    # 이 문자열들을 포함한 파일만 다운로드합니다 (비워두면 모든 파일 다운로드)
+    include:
+        []
+        # - video
+        # - img
+
+# UI 및 시스템 설정
+system:
+    disable_ui: false # true로 설정하면 UI 없이 실행
+    disable_disk_check: false # true로 설정하면 디스크 공간 체크 안 함

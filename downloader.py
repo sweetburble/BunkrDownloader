@@ -1,14 +1,17 @@
 """Python-based downloader for Bunkr albums and files.
 
 Usage:
-    Run the script from the command line with a valid album or media URL:
-        python3 downloader.py <album_or_media_url>
+    Ensure 'config.yaml' is configured correctly, then run:
+        python3 downloader.py
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+import yaml  # YAML 파싱을 위해 추가
+import pprint # 디버깅 출력을 위해 추가
+from types import SimpleNamespace # argparse.Namespace와 호환되도록 객체 생성
 from typing import TYPE_CHECKING
 
 from requests.exceptions import ConnectionError as RequestConnectionError
@@ -19,7 +22,7 @@ from src.config import (
     AlbumInfo,
     DownloadInfo,
     SessionInfo,
-    parse_arguments,
+    # parse_arguments, # YAML 사용으로 제거
 )
 from src.crawlers.crawler_utils import (
     extract_all_album_item_pages,
@@ -122,22 +125,62 @@ async def validate_and_download(
         raise RuntimeError(error_message) from err
 
 
+def load_config_from_yaml(config_path: str = "config.yaml") -> Namespace:
+    """Load configuration from YAML and convert to Namespace object."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: Configuration file '{config_path}' not found.")
+        sys.exit(1)
+    except yaml.YAMLError as exc:
+        print(f"Error parsing YAML file: {exc}")
+        sys.exit(1)
+
+    if not config.get('url'):
+        print("Error: 'url' field is required in config.yaml")
+        sys.exit(1)
+
+    # 기존 argparse.Namespace 구조에 맞춰 매핑
+    # 기존 코드들이 args.custom_path 등으로 접근하기 때문에 구조를 맞춰줍니다.
+    args = SimpleNamespace(
+        url=config['url'],
+        custom_path=config.get('download', {}).get('custom_path'),
+        exclude=config.get('filters', {}).get('ignore', []),
+        include=config.get('filters', {}).get('include', []),
+        disable_ui=config.get('system', {}).get('disable_ui', False),
+        disable_disk_check=config.get('system', {}).get('disable_disk_check', False)
+    )
+
+    return args
+
+
 async def main() -> None:
     """Initialize the download process."""
     clear_terminal()
     check_python_version()
 
+    # 1. Load Config from YAML
+    args = load_config_from_yaml()
+
+    # 2. Debug Log: 파싱된 설정 출력
+    print("----------- [Debug: Config Loaded] -----------")
+    pprint.pprint(vars(args))
+    print("----------------------------------------------\n")
+
     bunkr_status = get_bunkr_status()
-    args = parse_arguments()
+    # args = parse_arguments() # 기존 인수 파싱 제거
+    
+    # UI 비활성화 옵션 적용
     live_manager = initialize_managers(disable_ui=args.disable_ui)
 
     try:
         with live_manager.live:
             await validate_and_download(
                 bunkr_status,
-                args.url,
+                args.url, # YAML에서 불러온 URL 사용
                 live_manager,
-                args=args,
+                args=args, # YAML 설정 객체 전달
             )
             live_manager.stop()
 

@@ -49,28 +49,32 @@ class MediaDownloader:
         """Attempt to download the file with retries."""
         for attempt in range(self.retries):
             try:
+                # 타임아웃 설정: (연결 타임아웃, 읽기 타임아웃)
+                # 읽기 타임아웃을 60초로 넉넉하게 설정
                 response = requests.get(
                     self.download_info.download_link,
                     stream=True,
                     headers=DOWNLOAD_HEADERS,
-                    timeout=30,
+                    timeout=(20, 60),
                 )
                 response.raise_for_status()
 
-            except RequestException as req_err:
-                # Exit the loop if not retrying
-                if not self._handle_request_exception(req_err, attempt):
-                    break
-
-            else:
-                # Returns True if the download failed (marked as partial), otherwise
-                # False to indicate a successful download and exit the loop.
-                return save_file_with_progress(
+                # 이제 다운로드 도중 연결이 끊겨도 except 블록에서 잡을 수 있다.
+                failed = save_file_with_progress(
                     response,
                     final_path,
                     self.download_info.task,
                     self.live_manager,
                 )
+                
+                # 다운로드가 성공적으로 끝나면 루프 종료 (failed가 False면 성공)
+                if not failed:
+                    return False
+
+            except RequestException as req_err:
+                # Exit the loop if not retrying
+                if not self._handle_request_exception(req_err, attempt):
+                    break
 
         # Download failed
         return True
