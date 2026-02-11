@@ -97,9 +97,7 @@ class MediaDownloader:
                 details=f"The subdomain for {self.download_info.filename} is offline. "
                 "Check the log file.",
             )
-            write_on_session_log(self.download_info.download_link)
-            self.live_manager.update_task(self.download_info.task, visible=False)
-            self.live_manager.update_summary(SkippedReason.DOMAIN_OFFLINE)
+            self._finalize_download(SkippedReason.DOMAIN_OFFLINE)
             return None
 
         formatted_filename = truncate_filename(self.download_info.filename)
@@ -181,8 +179,7 @@ class MediaDownloader:
         if subdomain_is_offline(
             self.download_info.download_link, self.session_info.bunkr_status,
         ):
-            write_on_session_log(self.download_info.download_link)
-            self.live_manager.update_summary(SkippedReason.DOMAIN_OFFLINE)
+            self._finalize_download(SkippedReason.DOMAIN_OFFLINE)
             return log_and_skip_event(
                 f"The subdomain for {self.download_info.download_link} has been "
                 "previously marked as offline.",
@@ -258,6 +255,7 @@ class MediaDownloader:
                 "id": self.download_info.task,
                 "filename": self.download_info.filename,
                 "download_link": self.download_info.download_link,
+                "item_url": self.download_info.item_url,
             }
 
         self.live_manager.update_log(
@@ -265,6 +263,26 @@ class MediaDownloader:
             details=f"Failed to download {self.download_info.filename}. "
             "Check the log file.",
         )
-        self.live_manager.update_task(self.download_info.task, visible=False)
-        self.live_manager.update_summary(FailedReason.MAX_RETRIES_REACHED)
+        self._finalize_download(FailedReason.MAX_RETRIES_REACHED)
         return None
+
+    def _finalize_download(
+        self,
+        reason: FailedReason | SkippedReason,
+        *,
+        completed: int | None = None,
+    ) -> None:
+        outcome = reason.__class__.__name__.replace("Reason", "")
+
+        write_on_session_log(
+            self.download_info,
+            reason=reason,
+            outcome=outcome,
+        )
+
+        self.live_manager.update_task(
+            self.download_info.task,
+            completed=completed,
+            visible=False,
+        )
+        self.live_manager.update_summary(reason)

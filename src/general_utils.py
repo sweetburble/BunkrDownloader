@@ -25,10 +25,10 @@ from requests import Response
 from .config import (
     DOWNLOAD_HEADERS,
     FETCH_ERROR_MESSAGES,
+    GB,
     MIN_DISK_SPACE_GB,
     HTTPStatus,
 )
-from .file_utils import write_on_session_log
 from .url_utils import replace_domain_with_fallback
 
 if TYPE_CHECKING:
@@ -48,14 +48,13 @@ def validate_download_link(download_link: str) -> bool:
 
 async def fetch_page(url: str, retries: int = 5) -> BeautifulSoup | None:
     """Fetch the HTML content of a page at the given URL, with retry logic."""
-    tried_cr = False
+    tried_fallback = False
 
     def handle_response(response: Response) -> BeautifulSoup | None:
         """Process the HTTP response and handles specific status codes."""
         if response.status_code in FETCH_ERROR_MESSAGES:
             log_message = FETCH_ERROR_MESSAGES[response.status_code].format(url=url)
             logging.exception(log_message)
-            write_on_session_log(url)
             return None
 
         return BeautifulSoup(response.text, "html.parser")
@@ -63,8 +62,8 @@ async def fetch_page(url: str, retries: int = 5) -> BeautifulSoup | None:
     for attempt in range(retries):
         try:
             response = requests.Session().get(url, timeout=40)
-            if response.status_code == HTTPStatus.FORBIDDEN and not tried_cr:
-                tried_cr = True
+            if response.status_code == HTTPStatus.FORBIDDEN and not tried_fallback:
+                tried_fallback = True
                 url = replace_domain_with_fallback(url)
                 continue  # Retry immediately with .cr
 
@@ -80,9 +79,7 @@ async def fetch_page(url: str, retries: int = 5) -> BeautifulSoup | None:
                 await asyncio.sleep(delay)
 
         # Catch-all for request-related errors
-        except requests.RequestException as req_err:
-            log_message = f"Request error for {url}: {req_err}"
-            logging.exception(log_message)
+        except requests.RequestException:
             return None
 
     return None
@@ -126,7 +123,7 @@ def check_disk_space(live_manager: LiveManager, custom_path: str | None = None) 
     """Check if the available disk space is greater than or equal to `min_space` GB."""
     root_path = get_root_path() if custom_path is None else custom_path
     _, _, free_space = shutil.disk_usage(root_path)
-    free_space_gb = free_space / (1024 ** 3)
+    free_space_gb = free_space / GB
 
     if free_space_gb < MIN_DISK_SPACE_GB:
         live_manager.update_log(
