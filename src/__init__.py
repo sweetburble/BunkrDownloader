@@ -16,10 +16,16 @@ to be easily imported and used across different parts of the application.
 
 # src/__init__.py
 
+from .version import __author__, __title__, __version__, version_info
+
 __all__ = [
+    "__author__",
+    "__title__",
+    "__version__",
     "bunkr_utils",
     "config",
     "file_utils",
     "general_utils",
     "url_utils",
+    "version_info",
 ]

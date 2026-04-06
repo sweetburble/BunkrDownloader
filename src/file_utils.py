@@ -91,7 +91,7 @@ def sanitize_directory_name(directory_name: str) -> str:
     """
     invalid_chars_dict = {
         "nt": r'[\\/:*?"<>|]',  # Windows
-        "posix": r"[/:]",  # macOS and Linux
+        "posix": r"[/:]",       # macOS and Linux
     }
     invalid_chars = invalid_chars_dict.get(os.name)
     return re.sub(invalid_chars, "_", directory_name)
@@ -100,6 +100,8 @@ def sanitize_directory_name(directory_name: str) -> str:
 def create_download_directory(
     directory_name: str,
     custom_path: str | None = None,
+    *,
+    no_download_folder: bool = False,
 ) -> str:
     """Create a directory for downloads if it doesn't exist."""
     # Sanitizing the directory name (album ID), if provided
@@ -108,9 +110,9 @@ def create_download_directory(
     )
 
     # Determine the base download path.
-    base_path = (
-        Path(custom_path) / DOWNLOAD_FOLDER if custom_path else Path(DOWNLOAD_FOLDER)
-    )
+    base_path = Path(custom_path or ".")  # default to current directory
+    if not no_download_folder:
+        base_path /= DOWNLOAD_FOLDER      # append DOWNLOAD_FOLDER only if needed
 
     # Albums containing a single file will be directly downloaded into the 'Downloads'
     # folder, without creating a subfolder for the album ID.
@@ -143,7 +145,7 @@ def create_urls_file_backup() -> None:
         sys.exit(1)
 
     timestamp = datetime.now(timezone.utc).strftime("%d%m%Y_%H%M%S")
-    backup_file = Path(f"URLs_{timestamp}.txt.bak")
+    backup_file = Path(f"URLs_{timestamp}.bak")
     shutil.copy2(URLS_FILE, backup_folder / backup_file)
 
 

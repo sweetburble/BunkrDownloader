@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
+from .version import get_version_string
+
 if TYPE_CHECKING:
     from argparse import Namespace
 
@@ -38,7 +40,7 @@ DOWNLOAD_REFERER = "https://get.bunkrr.su/"
 # ============================
 MEDIA_SLUG_REGEX = r'const\s+slug\s*=\s*"([a-zA-Z0-9_-]+)"'  # Extract media slug.
 VALID_SLUG_REGEX = r"^[a-zA-Z0-9_-]+$"                       # Validate media slug.
-VALID_CHARACTERS_REGEX = r'[<>:"/\\|?*\x00-\x1f]'  # Strip only filesystem-illegal chars
+VALID_CHARACTERS_REGEX = r'[<>:"/\\|?*\x00-\x1f]'            # Validate characters.
 
 # ============================
 # UI & Table Settings
@@ -225,6 +227,11 @@ def add_common_arguments(parser: ArgumentParser) -> None:
         help="The directory where the downloaded content will be saved.",
     )
     parser.add_argument(
+        "--no-download-folder",
+        action="store_true",
+        help="Save files without a 'Downloads' subfolder.",
+    )
+    parser.add_argument(
         "--disable-ui",
         action="store_true",
         help="Disable the user interface.",
@@ -239,6 +246,12 @@ def add_common_arguments(parser: ArgumentParser) -> None:
         type=int,
         default=MAX_RETRIES,
         help="Maximum number of retries for downloading a single media.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=get_version_string(),
+        help="Show program's version and exit.",
     )
 
 

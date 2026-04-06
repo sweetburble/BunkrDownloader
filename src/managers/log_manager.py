@@ -58,7 +58,7 @@ class LoggerTable:
             log_table,
             title=f"[bold {self.title_color}]Log Messages",
             border_style=self.border_style,
-            width=2*panel_width,  # Log panel width is double the single table width
+            width=2 * panel_width,  # Log panel width is double the single table width
         )
 
     # Private methods

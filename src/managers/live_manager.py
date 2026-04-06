@@ -12,10 +12,13 @@ import time
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
+from rich.align import Align
 from rich.console import Group
 from rich.live import Live
+from rich.text import Text
 
 from src.config import REFRESH_PER_SECOND, TASK_REASON_MAPPING, TaskResult
+from src.version import get_version_string
 
 from .log_manager import LoggerTable
 from .progress_manager import ProgressManager
@@ -112,9 +115,12 @@ class LiveManager:
     def _render_live_view(self) -> Group:
         """Render the combined live view of the progress table and the logger table."""
         panel_width = self.progress_manager.get_panel_width()
+        footer_text = Text(get_version_string(), style="dim")
+        footer = Align.left(footer_text)
         return Group(
             self.progress_table,
             self.logger_table.render_log_panel(panel_width=2 * panel_width),
+            footer,
         )
 
     def _compute_execution_time(self) -> str:
