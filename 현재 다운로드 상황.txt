@@ -1,0 +1,1 @@
+uv run .\downloader.py https://bunkr.cr/a/maa3ferV --ignore aduhaymantap Afr-vA5AESH .ini

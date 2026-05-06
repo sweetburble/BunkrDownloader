@@ -1,21 +1,18 @@
-"""Main module to read Bunkr URLs from a file, and download from them.
+"""Main module to read configuration and run the entire download process.
 
-This module manages the entire download process by leveraging asynchronous operations,
-allowing for efficient handling of multiple URLs.
-
-Usage:
-    To run the module, execute the script directly. It will process URLs listed in
-    'URLs.txt' and log the session activities in 'session_log.txt'.
+이 스크립트는 config.yaml 파일에 정의된 모든 URL(다중)을 순차적으로 
+안전하게 다운로드합니다.
 """
 
 import asyncio
 import sys
 from argparse import Namespace
 
-from downloader import parse_arguments, validate_and_download
+# 이제 parse_arguments 대신 load_config_from_yaml을 가져옵니다.
+from downloader import load_config_from_yaml, validate_and_download
 from src.bunkr_utils import get_bunkr_status
-from src.config import SESSION_LOG, URLS_FILE
-from src.file_utils import create_urls_file_backup, read_file, write_file
+from src.config import SESSION_LOG
+from src.file_utils import read_file, write_file
 from src.general_utils import check_python_version, clear_terminal
 from src.managers.live_manager import initialize_managers
 
@@ -28,29 +25,27 @@ async def process_urls(urls: list[str], args: Namespace) -> None:
     with live_manager.live:
         for url in urls:
             await validate_and_download(bunkr_status, url, live_manager, args=args)
-
         live_manager.stop()
 
 
 async def main() -> None:
     """Run the script and process URLs."""
-    # Clear the terminal and session log file
+    # 터미널 및 세션 로그 파일 초기화
     clear_terminal()
     write_file(SESSION_LOG)
 
-    # Check Python version and parse arguments
+    # 파이썬 버전 체크
     check_python_version()
-    args = parse_arguments(common_only=True)
+    
+    # 🌟 이제 모든 설정과 URL 리스트는 config.yaml에서 가져옵니다.
+    args = load_config_from_yaml()
 
-    # Backup the URLs file
-    create_urls_file_backup()
+    if not args.urls:
+        print("설정 파일(config.yaml)에 다운로드할 URL이 없습니다.")
+        return
 
-    # Read and process URLs, ignoring empty lines
-    urls = [url.strip() for url in read_file(URLS_FILE) if url.strip()]
-    await process_urls(urls, args)
-
-    # Clear URLs file
-    write_file(URLS_FILE)
+    # 가져온 모든 URL을 처리합니다.
+    await process_urls(args.urls, args)
 
 
 if __name__ == "__main__":
