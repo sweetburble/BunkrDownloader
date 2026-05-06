@@ -11,7 +11,7 @@ import asyncio
 import sys
 import yaml  # YAML 파싱을 위해 추가
 import pprint # 디버깅 출력을 위해 추가
-from types import SimpleNamespace # argparse.Namespace와 호환되도록 객체 생성
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from requests.exceptions import ConnectionError as RequestConnectionError
@@ -53,9 +53,7 @@ from src.url_utils import (
 
 if TYPE_CHECKING:
     from argparse import Namespace
-
     from bs4 import BeautifulSoup
-
     from src.managers.live_manager import LiveManager
 
 
@@ -106,9 +104,8 @@ async def validate_and_download(
     args: Namespace | None = None,
 ) -> None:
     """Validate the provided URL, and initiate the download process."""
-    # Check the available disk space on the download path before starting the download
-    if not args.disable_disk_check:
-        check_disk_space(live_manager, custom_path=args.custom_path)
+    if not getattr(args, "disable_disk_check", False):
+        check_disk_space(live_manager, custom_path=getattr(args, "custom_path", None))
 
     validated_url = add_https_prefix(url)
     soup = await fetch_page(validated_url)
@@ -126,9 +123,10 @@ async def validate_and_download(
     directory_name = format_directory_name(album_name, album_id)
     download_path = create_download_directory(
         directory_name,
-        custom_path=args.custom_path,
-        no_download_folder=args.no_download_folder,
+        custom_path=getattr(args, "custom_path", None),
+        no_download_folder=getattr(args, "no_download_folder", False),
     )
+    
     session_info = SessionInfo(
         args=args,
         bunkr_status=bunkr_status,
@@ -141,7 +139,7 @@ async def validate_and_download(
             validated_url,
             soup,
             live_manager,
-            args.max_retries,
+            getattr(args, "max_retries", 3),
         )
 
     except (RequestConnectionError, Timeout, RequestException) as err:
@@ -161,50 +159,60 @@ def load_config_from_yaml(config_path: str = "config.yaml") -> Namespace:
         print(f"Error parsing YAML file: {exc}")
         sys.exit(1)
 
-    if not config.get('url'):
-        print("Error: 'url' field is required in config.yaml")
+    # config.yaml에서 urls 목록을 가져오기 (단일 url 하위호환 유지)
+    raw_urls = config.get('urls', [])
+    raw_url = config.get('url', None)
+    
+    url_list = []
+    if isinstance(raw_urls, list):
+        url_list.extend(raw_urls)
+    if raw_url and isinstance(raw_url, str):
+        url_list.append(raw_url)
+        
+    # 빈 값 제거
+    url_list = [u.strip() for u in url_list if u and u.strip()]
+
+    if not url_list:
+        print("Error: 'urls' field is empty or missing in config.yaml")
         sys.exit(1)
 
-    # 기존 argparse.Namespace 구조에 맞춰 매핑
-    # 기존 코드들이 args.custom_path 등으로 접근하기 때문에 구조를 맞춰줍니다.
+    # 기존 argparse 구조에 맞게 누락된 변수까지 포함하여 매핑
     args = SimpleNamespace(
-        url=config['url'],
+        urls=url_list,
         custom_path=config.get('download', {}).get('custom_path'),
+        no_download_folder=config.get('download', {}).get('no_download_folder', False),
         exclude=config.get('filters', {}).get('ignore', []),
         include=config.get('filters', {}).get('include', []),
         disable_ui=config.get('system', {}).get('disable_ui', False),
-        disable_disk_check=config.get('system', {}).get('disable_disk_check', False)
+        disable_disk_check=config.get('system', {}).get('disable_disk_check', False),
+        max_retries=config.get('system', {}).get('max_retries', 3)
     )
 
     return args
 
 
 async def main() -> None:
-    """Initialize the download process."""
+    """Initialize the download process (단일 테스트 용도)."""
     clear_terminal()
     check_python_version()
 
-    # 1. Load Config from YAML
     args = load_config_from_yaml()
 
-    # 2. Debug Log: 파싱된 설정 출력
     print("----------- [Debug: Config Loaded] -----------")
     pprint.pprint(vars(args))
     print("----------------------------------------------\n")
 
     bunkr_status = get_bunkr_status()
-    # args = parse_arguments() # 기존 인수 파싱 제거
-    
-    # UI 비활성화 옵션 적용
     live_manager = initialize_managers(disable_ui=args.disable_ui)
 
     try:
         with live_manager.live:
+            # downloader.py 직접 실행 시 yaml의 첫 번째 URL만 다운로드 (테스트용)
             await validate_and_download(
                 bunkr_status,
-                args.url, # YAML에서 불러온 URL 사용
+                args.urls[0], 
                 live_manager,
-                args=args, # YAML 설정 객체 전달
+                args=args,
             )
             live_manager.stop()
 

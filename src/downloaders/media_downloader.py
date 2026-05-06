@@ -49,12 +49,13 @@ class MediaDownloader:
         self.live_manager = live_manager
         self.retries = retries
 
-    def attempt_download(self, final_path: str) -> bool:
-        """Attempt to download the file with retries."""
+    def attempt_download(self, final_path: str) -> tuple[bool, str]:
+        """Attempt to download the file with retries and return (failed_status, error_details)."""
+        last_error_msg = "알 수 없는 에러가 발생했습니다."
+        
         for attempt in range(self.retries):
             try:
                 # 타임아웃 설정: (연결 타임아웃, 읽기 타임아웃)
-                # 읽기 타임아웃을 60초로 넉넉하게 설정
                 response = requests.get(
                     self.download_info.download_link,
                     stream=True,
@@ -63,7 +64,6 @@ class MediaDownloader:
                 )
                 response.raise_for_status()
 
-                # 이제 다운로드 도중 연결이 끊겨도 except 블록에서 잡을 수 있다.
                 failed = save_file_with_progress(
                     response,
                     final_path,
@@ -73,15 +73,19 @@ class MediaDownloader:
                 
                 # 다운로드가 성공적으로 끝나면 루프 종료 (failed가 False면 성공)
                 if not failed:
-                    return False
+                    return False, ""
 
             except RequestException as req_err:
+                # 구체적인 HTTP 상태 코드와 에러 메시지를 캡처합니다.
+                status_code = req_err.response.status_code if req_err.response else "No Response"
+                last_error_msg = f"HTTP Error ({status_code}): {str(req_err)}"
+                
                 # Exit the loop if not retrying
                 if not self._handle_request_exception(req_err, attempt):
                     break
 
         # Download failed
-        return True
+        return True, last_error_msg
 
     def download(self) -> dict | None:
         """Handle the download process."""
@@ -107,36 +111,33 @@ class MediaDownloader:
         if self._skip_file_download(final_path):
             return None
 
+        error_details = "알 수 없는 에러"
         # Attempt to download the file with retries
         try:
-            failed_download = self.attempt_download(final_path)
+            failed_download, error_details = self.attempt_download(final_path)
 
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as err:
+            error_details = f"ConnectionError: {str(err)}"
             self.live_manager.update_log(
                 event="Connection error",
-                details="Read timed out for {self.download_info.filename}",
+                # 버그 수정: 누락되었던 f-string 포맷팅을 복구하고 상세 에러를 추가했습니다.
+                details=f"Read timed out for {self.download_info.filename}. Details: {error_details}",
             )
             failed_download = True
 
         # Handle failed download after retries
         if failed_download:
-            return self._handle_failed_download(is_final_attempt=is_final_attempt)
+            return self._handle_failed_download(
+                is_final_attempt=is_final_attempt, 
+                error_details=error_details
+            )
 
         self.live_manager.update_summary(CompletedReason.DOWNLOAD_SUCCESS)
         return None
 
     # Private methods
     def _skip_file_download(self, final_path: str) -> bool:
-        """Determine whether a file should be skipped during download.
-
-        This method checks the following conditions:
-        - If the file already exists at the specified path.
-        - If the file's name matches any pattern in the ignore list.
-        - If the file's name does not match any pattern in the include list.
-
-        If any of these conditions are met, the download is skipped, and appropriate
-        logs are updated.
-        """
+        """Determine whether a file should be skipped during download."""
         ignore_list = getattr(self.session_info.args, "ignore", [])
         include_list = getattr(self.session_info.args, "include", [])
 
@@ -243,12 +244,15 @@ class MediaDownloader:
         self.live_manager.update_log(event="Request error", details=str(req_err))
         return False
 
-    def _handle_failed_download(self, *, is_final_attempt: bool) -> dict | None:
-        """Handle a failed download after all retry attempts."""
+    def _handle_failed_download(
+        self, *, is_final_attempt: bool, error_details: str = ""
+    ) -> dict | None:
+        """Handle a failed download after all retry attempts and log the reason."""
         if not is_final_attempt:
             self.live_manager.update_log(
                 event="Exceeded retry attempts",
                 details=f"Max retries reached for {self.download_info.filename}. "
+                f"Reason: {error_details}. "
                 "It will be retried one more time after all other tasks.",
             )
             return {
@@ -256,12 +260,13 @@ class MediaDownloader:
                 "filename": self.download_info.filename,
                 "download_link": self.download_info.download_link,
                 "item_url": self.download_info.item_url,
+                "last_error": error_details,  # 앨범 다운로더에 상세 에러 이유를 함께 넘깁니다.
             }
 
         self.live_manager.update_log(
             event="Download failed",
             details=f"Failed to download {self.download_info.filename}. "
-            "Check the log file.",
+            f"Reason: {error_details}. Check the log file.",
         )
         self._finalize_download(FailedReason.MAX_RETRIES_REACHED)
         return None

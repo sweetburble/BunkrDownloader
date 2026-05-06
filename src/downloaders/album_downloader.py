@@ -48,7 +48,7 @@ class AlbumDownloader:
                     event="Fetch failed",
                     details=f"Unable to load album item page: {item_page}",
                 )
-                error_message = "Failed to load album item page: {item_page}"
+                error_message = f"Failed to load album item page: {item_page}"
                 raise RuntimeError(error_message)
 
             item_download_link, item_filename = await get_download_info(
@@ -113,6 +113,13 @@ class AlbumDownloader:
     async def _process_failed_downloads(self) -> None:
         """Process any failed downloads after the initial attempt."""
         for data in self.failed_downloads:
+            # 재시도하기 전에 이전에 어떤 이유로 실패했었는지 화면(로그)에 표시합니다.
+            error_msg = data.get("last_error", "Unknown error")
+            self.live_manager.update_log(
+                event="Retrying final attempt",
+                details=f"Retrying {data['filename']} which previously failed due to: {error_msg}"
+            )
+
             failed_download_info = DownloadInfo(
                 item_url=data["item_url"],
                 download_link=data["download_link"],
