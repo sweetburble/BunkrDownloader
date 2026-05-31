@@ -31,7 +31,7 @@ MIN_DISK_SPACE_GB = 3          # Minimum free disk space (in GB) required.
 # API / Status Endpoints
 # ============================
 STATUS_PAGE = "https://status.bunkr.ru/"  # The URL of the status page.
-BUNKR_API = "https://bunkr.cr/api/vs"     # The API for retrieving encryption data.
+BUNKR_API = "https://glb-apisign.cdn.cr/sign"
 FALLBACK_DOMAIN = "bunkr.cr"              # The domain used if the main one is offline.
 DOWNLOAD_REFERER = "https://get.bunkrr.su/"
 
@@ -41,6 +41,7 @@ DOWNLOAD_REFERER = "https://get.bunkrr.su/"
 MEDIA_SLUG_REGEX = r'const\s+slug\s*=\s*"([a-zA-Z0-9_-]+)"'  # Extract media slug.
 VALID_SLUG_REGEX = r"^[a-zA-Z0-9_-]+$"                       # Validate media slug.
 VALID_CHARACTERS_REGEX = r'[<>:"/\\|?*\x00-\x1f]'            # Validate characters.
+JS_VARS_REGEX = r'var\s+(\w+)\s*=\s*(".*?"|\'.*?\'|[^;]+);'
 
 # ============================
 # UI & Table Settings

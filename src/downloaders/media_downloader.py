@@ -120,7 +120,7 @@ class MediaDownloader:
             error_details = f"ConnectionError: {str(err)}"
             self.live_manager.update_log(
                 event="Connection error",
-                # 버그 수정: 누락되었던 f-string 포맷팅을 복구하고 상세 에러를 추가했습니다.
+                
                 details=f"Read timed out for {self.download_info.filename}. Details: {error_details}",
             )
             failed_download = True
