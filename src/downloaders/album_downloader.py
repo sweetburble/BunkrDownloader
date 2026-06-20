@@ -7,7 +7,7 @@ integrating with live task displays.
 import asyncio
 from asyncio import Semaphore
 
-from src.config import MAX_RETRIES, MAX_WORKERS, AlbumInfo, DownloadInfo, SessionInfo
+from src.config import MAX_RETRIES, MAX_WORKERS, AlbumInfo, DownloadInfo, FailedReason, SessionInfo
 from src.crawlers.crawler_utils import get_download_info
 from src.general_utils import fetch_page
 from src.managers.live_manager import LiveManager
@@ -42,15 +42,7 @@ class AlbumDownloader:
             task = self.live_manager.add_task(current_task=current_task)
 
             # Process the download of an item
-            item_soup = await fetch_page(item_page)
-            if item_soup is None:
-                self.live_manager.update_log(
-                    event="Fetch failed",
-                    details=f"Unable to load album item page: {item_page}",
-                )
-                error_message = f"Failed to load album item page: {item_page}"
-                raise RuntimeError(error_message)
-
+            item_soup = await self._fetch_page_with_retries(item_page)
             item_download_link, item_filename = await get_download_info(
                 item_page,
                 item_soup,
@@ -73,6 +65,16 @@ class AlbumDownloader:
                 failed_download = await asyncio.to_thread(media_downloader.download)
                 if failed_download:
                     self.failed_downloads.append(failed_download)
+
+            else:
+                # URL could not be resolved after all retries — report as failed
+                # so the user knows which files need attention.
+                self.live_manager.update_log(
+                    event="Download failed",
+                    details=f"Could not resolve a download URL for {item_filename}.",
+                )
+                self.live_manager.update_task(task, completed=100, visible=False)
+                self.live_manager.update_summary(FailedReason.MAX_RETRIES_REACHED)
 
     async def download_album(
         self,
@@ -99,6 +101,34 @@ class AlbumDownloader:
             await self._process_failed_downloads()
 
     # Private methods
+    async def _fetch_page_with_retries(
+        self,
+        item_page: str,
+        max_retries: int = MAX_RETRIES,
+        base_delay: float = 1.5,
+    ) -> None:
+        """Try to fetch a page multiple times with progressive backoff."""
+        item_soup = None
+        for attempt in range(1, max_retries + 1):
+            item_soup = await fetch_page(item_page)
+            if item_soup is not None:
+                return item_soup
+
+            self.live_manager.update_log(
+                event="Fetch retry",
+                details=f"Attempt {attempt}/{max_retries} failed for: {item_page}",
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(base_delay * attempt)
+
+        # All attempts failed
+        self.live_manager.update_log(
+            event="Fetch failed",
+            details=f"Unable to load page after {max_retries} attempts: {item_page}",
+        )
+        error_message = f"Failed to load page: {item_page}"
+        raise RuntimeError(error_message)
+
     async def _retry_failed_download(self, failed_download_info: DownloadInfo) -> None:
         """Handle failed downloads and retries them."""
         media_downloader = MediaDownloader(

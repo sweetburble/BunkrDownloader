@@ -82,21 +82,19 @@ async def extract_all_album_item_pages(
 
 
 async def get_item_download_link(
+    session: aiohttp.ClientSession,
     item_url: str,
     soup: BeautifulSoup | None = None,
 ) -> str | None:
     """Retrieve a signed direct download URL for a Bunkr item page."""
     if soup is None:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(item_url) as response,
-        ):
+        async with session.get(item_url) as response:
             html = await response.text()
 
         soup = BeautifulSoup(html, "html.parser")
 
     # Get the signed URL
-    return await get_api_response(soup)
+    return await get_api_response(session, item_url, soup)
 
 
 def decrypt_cf_email(cf_email_hex: str) -> str:
@@ -155,9 +153,12 @@ def format_item_filename(original_filename: str, url_based_filename: str) -> str
 
 async def get_download_info(item_url: str, item_soup: BeautifulSoup) -> tuple:
     """Gather download information (link and filename) for the item."""
-    item_download_link = await get_item_download_link(item_url, soup=item_soup)
-    item_filename = get_item_filename(item_soup)
+    async with aiohttp.ClientSession() as session:
+        item_download_link = await get_item_download_link(
+            session, item_url, soup=item_soup,
+        )
 
+    item_filename = get_item_filename(item_soup)
     url_based_filename = (
         get_url_based_filename(item_download_link) if item_download_link else None
     )
