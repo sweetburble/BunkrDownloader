@@ -1,51 +1,77 @@
-"""Main module to read configuration and run the entire download process.
+"""Main module to read Bunkr URLs from a file, and download from them.
 
-이 스크립트는 config.yaml 파일에 정의된 모든 URL(다중)을 순차적으로 
-안전하게 다운로드합니다.
+This module manages the entire download process by leveraging asynchronous operations,
+allowing for efficient handling of multiple URLs.
+
+Usage:
+    To run the module, execute the script directly. It will process URLs listed in
+    'URLs.txt' and log the session activities in 'session_log.txt'.
 """
+
+from __future__ import annotations
 
 import asyncio
 import sys
-from argparse import Namespace
+from typing import TYPE_CHECKING
 
-# 이제 parse_arguments 대신 load_config_from_yaml을 가져옵니다.
-from downloader import load_config_from_yaml, validate_and_download
+from downloader import parse_arguments
 from src.bunkr_utils import get_bunkr_status
-from src.config import SESSION_LOG
-from src.file_utils import read_file, write_file
+from src.config import URLS_FILE
+from src.file_utils import create_urls_file_backup, log_session_start, read_file
 from src.general_utils import check_python_version, clear_terminal
-from src.managers.live_manager import initialize_managers
+from src.run_utils import (
+    build_rate_limiter,
+    log_failed_urls,
+    run_concurrent,
+    run_dry_run,
+    run_sequential,
+)
+
+if TYPE_CHECKING:
+    from argparse import Namespace
 
 
-async def process_urls(urls: list[str], args: Namespace) -> None:
-    """Validate and downloads items for a list of URLs."""
+async def process_urls(urls: list[str], args: Namespace) -> list[str]:
+    """Validate and download items for a list of URLs."""
     bunkr_status = get_bunkr_status()
-    live_manager = initialize_managers(disable_ui=args.disable_ui)
 
-    with live_manager.live:
-        for url in urls:
-            await validate_and_download(bunkr_status, url, live_manager, args=args)
-        live_manager.stop()
+    # Dry-run skips downloads and bypasses Live UI, printing a preview per URL.
+    if getattr(args, "dry_run", False):
+        return await run_dry_run(urls, bunkr_status, args)
+
+    # Shared RateLimiter ensures --rate-limit applies across all concurrent downloads.
+    rate_limiter = build_rate_limiter(args)
+    max_concurrent = getattr(args, "max_concurrent_urls", 1) or 1
+
+    # Default, fully sequential path.
+    if max_concurrent <= 1 or len(urls) <= 1:
+        return await run_sequential(urls, bunkr_status, args, rate_limiter)
+
+    # Rich progress assumes only one active album. Concurrent mode uses plain logging
+    # instead to avoid incorrect or garbled progress bars.
+    return await run_concurrent(urls, bunkr_status, args, rate_limiter)
 
 
 async def main() -> None:
     """Run the script and process URLs."""
-    # 터미널 및 세션 로그 파일 초기화
+    # Clear terminal without wiping logs; append session marker instead.
     clear_terminal()
-    write_file(SESSION_LOG)
+    log_session_start()
 
     # 파이썬 버전 체크
     check_python_version()
-    
-    # 🌟 이제 모든 설정과 URL 리스트는 config.yaml에서 가져옵니다.
-    args = load_config_from_yaml()
+    args = parse_arguments(common_only=True)
 
-    if not args.urls:
-        print("설정 파일(config.yaml)에 다운로드할 URL이 없습니다.")
-        return
+    # Backup the URLs file
+    create_urls_file_backup()
 
-    # 가져온 모든 URL을 처리합니다.
-    await process_urls(args.urls, args)
+    # Read and process URLs, ignoring empty lines
+    urls = [url.strip() for url in read_file(URLS_FILE) if url.strip()]
+    failed_urls = await process_urls(urls, args)
+
+    # URLs.txt is unchanged; reruns skip completed items and only report failures.
+    if failed_urls:
+        log_failed_urls(failed_urls)
 
 
 if __name__ == "__main__":
