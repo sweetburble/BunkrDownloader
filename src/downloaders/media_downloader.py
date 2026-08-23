@@ -6,6 +6,7 @@ download experience.
 
 from __future__ import annotations
 
+import os
 import random
 import time
 from pathlib import Path
@@ -14,23 +15,16 @@ from typing import TYPE_CHECKING
 import requests
 from requests import RequestException
 
-from src.bunkr_utils import mark_subdomain_as_offline, subdomain_is_offline
-from src.config import (
-    DOWNLOAD_HEADERS,
-    MAX_RETRIES,
-    CompletedReason,
-    DownloadInfo,
-    FailedReason,
-    HTTPStatus,
-    SessionInfo,
-    SkippedReason,
-)
-from src.file_utils import (
+from src.config import DOWNLOAD_HEADERS
+from src.enums import CompletedReason, FailedReason, HTTPStatus, SkippedReason
+from src.misc.bunkr_utils import mark_subdomain_as_offline, subdomain_is_offline
+from src.misc.file_utils import (
     matches_ignore_list,
     matches_include_list,
     truncate_filename,
     write_on_session_log,
 )
+from src.models import DownloadConfig, DownloadInfo, RetryConfig, SessionInfo
 
 from .download_utils import (
     detect_range_support,
@@ -42,6 +36,9 @@ from .download_utils import (
 if TYPE_CHECKING:
     from src.managers.live_manager import LiveManager
 
+_BACKOFF_FACTOR = 1.5
+_SINGLE_CONNECTION_TIMEOUT = 5
+
 
 class MediaDownloader:
     """Manage the downloading of individual files from Bunkr URLs."""
@@ -51,68 +48,63 @@ class MediaDownloader:
         session_info: SessionInfo,
         download_info: DownloadInfo,
         live_manager: LiveManager,
-        retries: int = MAX_RETRIES,
-        *,
-        has_external_retry: bool = False,
+        retry_config: RetryConfig,
     ) -> None:
         """Initialize the MediaDownloader instance."""
         self.session_info = session_info
         self.download_info = download_info
         self.live_manager = live_manager
-        self.retries = retries
-        # True when a caller (e.g. AlbumDownloader) will retry this item again later if
-        # it fails. When False (the default, used for standalone single-file URLs), a
-        # failure is treated as final immediately since nothing else will retry it.
-        self.has_external_retry = has_external_retry
+        self.retry_config = retry_config
 
     def attempt_download(self, final_path: str) -> bool:
-        """Attempt to download the file, using parallel chunks when possible.
+        """Attempt to download the file, using parallel chunks when supported.
 
-        If the server supports byte-range requests and the file is large enough,
-        the download is split into num_connections parallel chunks (each saved
-        as a .partN file to allow resuming).  Falls back to the original
-        single-connection stream when chunking is not applicable.
+        For sufficiently large files, uses parallel byte-range requests when the server
+        supports them. Each chunk is saved to a separate ``.partN`` file to support
+        resuming. Falls back to a single-connection download when chunking is not
+        applicable. Both download strategies use the same outer retry budget and
+        exponential backoff.
 
-        The chunked path honors the same outer retry budget (--max-retries)
-        as the single-connection fallback: a persistent failure (all internal
-        per-chunk retries exhausted) triggers the same exponential back-off
-        and re-attempt cycle via _retry_with_backoff, instead of giving up
-        after a single call.
+        Returns:
+            True if the download failed, False if it succeeded.
 
-        Returns True if the download failed, False on success.
         """
         num_connections = getattr(self.session_info.args, "connections", 1)
         rate_limiter = self.session_info.rate_limiter
 
-        for attempt in range(self.retries):
+        for attempt in range(self.retry_config.retries):
             try:
                 supports_range, content_length = detect_range_support(
-                    self.download_info.download_link, DOWNLOAD_HEADERS,
+                    self.download_info.download_link,
+                    DOWNLOAD_HEADERS,
                 )
 
                 if should_use_parallel_download(
-                    content_length, num_connections, supports_range=supports_range,
+                    content_length,
+                    num_connections,
+                    supports_range=supports_range,
                 ):
-                    # .partN files are preserved on failure so a re-attempt
-                    # (here or on a future run) resumes instead of restarting.
+                    # .partN files are preserved on failure so a future attempt
+                    # resumes instead of restarting.
                     chunked_failed = save_file_with_chunks(
                         self.download_info.download_link,
                         final_path,
-                        num_connections,
                         self.download_info.task,
                         self.live_manager,
-                        DOWNLOAD_HEADERS,
-                        content_length,
-                        rate_limiter=rate_limiter,
+                        DownloadConfig(
+                            content_length=content_length,
+                            num_connections=num_connections,
+                            headers=DOWNLOAD_HEADERS,
+                            rate_limiter=rate_limiter,
+                        ),
                     )
                     if not chunked_failed:
                         return False
 
-                    # Persistent failure after CHUNK_MAX_RETRIES internal
-                    # attempts -- consume one outer retry slot, same as a
-                    # request-level failure on the fallback path below.
+                    # Persistent failure after CHUNK_MAX_RETRIES attempts.
                     if not self._retry_with_backoff(
-                        attempt, event="Retrying chunked download",
+                        attempt,
+                        event="Retrying chunked download",
                     ):
                         break
 
@@ -123,7 +115,7 @@ class MediaDownloader:
                     self.download_info.download_link,
                     stream=True,
                     headers=DOWNLOAD_HEADERS,
-                    timeout=(20, 60),
+                    timeout=_SINGLE_CONNECTION_TIMEOUT,
                 )
                 response.raise_for_status()
 
@@ -146,18 +138,21 @@ class MediaDownloader:
         """Handle the download process.
 
         Returns:
-            True if the item ultimately failed (and no one else will retry it),
-            False if it succeeded, was skipped, or will be retried later by an external
-            caller (has_external_retry=True).
+            True if the item ultimately failed (and no one else will retry it), False if
+            it succeeded, was skipped, or will be retried later by an external caller.
 
         """
-        is_final_attempt = not self.has_external_retry
+        is_final_attempt = not self.retry_config.has_external_retry
         is_offline = subdomain_is_offline(
             self.download_info.download_link,
             self.session_info.bunkr_status,
         )
-
-        if is_offline and is_final_attempt:
+        should_skip_offline = (
+            is_offline
+            and is_final_attempt
+            and not self.session_info.args.disable_server_check
+        )
+        if should_skip_offline:
             self.live_manager.update_log(
                 event="Non-operational subdomain",
                 details=f"The subdomain for {self.download_info.filename} is offline. "
@@ -166,10 +161,9 @@ class MediaDownloader:
             self._finalize_download(SkippedReason.DOMAIN_OFFLINE)
             return False
 
+        # Skip download if the file exists or is blacklisted
         formatted_filename = truncate_filename(self.download_info.filename)
         final_path = Path(self.session_info.download_path) / formatted_filename
-
-        # Skip download if the file exists or is blacklisted
         if self._skip_file_download(final_path):
             return False
 
@@ -194,15 +188,19 @@ class MediaDownloader:
                 error_details=error_details
             )
 
+        self._apply_item_mtime(final_path)
         self.live_manager.update_summary(CompletedReason.DOWNLOAD_SUCCESS)
         return False
 
     # Private methods
     def _skip_file_download(self, final_path: str) -> bool:
-        """Determine whether a file should be skipped during download."""
-        ignore_list = getattr(self.session_info.args, "ignore", [])
-        include_list = getattr(self.session_info.args, "include", [])
+        """Determine whether a file should be skipped during download.
 
+        If any of these conditions are met, the download is skipped:
+            - The file already exists at the specified path.
+            - The file's name matches any pattern in the ignore list.
+            - The file's name does not match any pattern in the include list.
+        """
         def log_and_skip_event(reason: str) -> bool:
             """Log the skip reason and updates the task before."""
             self.live_manager.update_log(event="Skipped download", details=reason)
@@ -212,6 +210,9 @@ class MediaDownloader:
                 visible=False,
             )
             return True
+
+        ignore_list = getattr(self.session_info.args, "ignore", [])
+        include_list = getattr(self.session_info.args, "include", [])
 
         # Check if the file already exists
         if Path(final_path).exists():
@@ -235,8 +236,12 @@ class MediaDownloader:
             )
 
         # Check if the subdomain is marked as offline
-        if subdomain_is_offline(
-            self.download_info.download_link, self.session_info.bunkr_status,
+        if (
+            subdomain_is_offline(
+                self.download_info.download_link,
+                self.session_info.bunkr_status,
+            )
+            and not self.session_info.args.disable_server_check
         ):
             self._finalize_download(SkippedReason.DOMAIN_OFFLINE)
             return log_and_skip_event(
@@ -252,26 +257,25 @@ class MediaDownloader:
         self.live_manager.update_log(
             event=event,
             details=f"{event} for {self.download_info.filename} "
-            f"({attempt + 1}/{self.retries})...",
+            f"({attempt + 1}/{self.retry_config.retries})...",
         )
 
-        if attempt < self.retries - 1:
-            delay = 3 ** (attempt + 1) + random.uniform(1, 3)  # noqa: S311
+        if attempt < self.retry_config.retries - 1:
+            delay = _BACKOFF_FACTOR ** (attempt + 1) + random.uniform(1, 2)  # noqa: S311
             time.sleep(delay)
             return True
 
         return False
 
     def _handle_request_exception(
-        self, req_err: RequestException, attempt: int,
+        self,
+        req_err: RequestException,
+        attempt: int,
     ) -> bool:
         """Handle exceptions during the request and manages retries."""
-        is_server_down = (
-            req_err.response is None
-            or req_err.response.status_code in (
-                HTTPStatus.SERVER_DOWN,
-                HTTPStatus.SERVICE_UNAVAILABLE,
-            )
+        is_server_down = req_err.response is None or req_err.response.status_code in (
+            HTTPStatus.SERVER_DOWN,
+            HTTPStatus.SERVICE_UNAVAILABLE,
         )
 
         # Mark the subdomain as offline and exit the loop
@@ -295,7 +299,7 @@ class MediaDownloader:
                 details=f"Bad gateway for {self.download_info.filename}.",
             )
             # Setting retries to 1 forces an immediate failure on the next check.
-            self.retries = 1
+            self.retry_config.retries = 1
             return False
 
         # Do not retry, exit the loop
@@ -305,10 +309,9 @@ class MediaDownloader:
     def _handle_failed_download(self, *, is_final_attempt: bool) -> bool:
         """Handle a failed download after all retry attempts.
 
-        Always returns True (failed). When this is not the final attempt,
-        only a log line is emitted -- the caller (AlbumDownloader) already
-        has everything it needs to retry the item itself and is expected
-        to do so. The session log is only written on the final attempt,
+        Always returns True (failed). When this is not the final attempt, only a log
+        line is emitted -- the caller (AlbumDownloader) already has everything it needs
+        to retry the item itself. The session log is only written on the final attempt,
         since that is the only point at which the outcome is permanent.
         """
         if not is_final_attempt:
@@ -317,6 +320,13 @@ class MediaDownloader:
                 details=f"Max retries reached for {self.download_info.filename}. "
                 f"Reason: {error_details}. "
                 "It will be retried one more time after all other tasks.",
+            )
+            # Hide stalled rows until retries to avoid cluttering the UI during large
+            # albums. Rows reappear automatically when retries make progress.
+            self.live_manager.update_task(
+                self.download_info.task,
+                completed=None,
+                visible=False,
             )
             return True
 
@@ -328,20 +338,32 @@ class MediaDownloader:
         self._finalize_download(FailedReason.MAX_RETRIES_REACHED)
         return True
 
+    def _apply_item_mtime(self, final_path: Path) -> None:
+        """Set the downloaded file's modified time to the item's source date.
+
+        Best-effort only: if no date could be extracted from the item page
+        (self.download_info.item_date is None) or the OS call fails, the file simply
+        keeps its normal (download-time) mtime.
+        """
+        item_date = self.download_info.item_date
+        if item_date is None:
+            return
+
+        try:
+            timestamp = item_date.timestamp()
+            os.utime(final_path, (timestamp, timestamp))
+
+        except (OSError, OverflowError, ValueError):
+            pass
+
     def _finalize_download(
         self,
         reason: FailedReason | SkippedReason,
         *,
-        completed: int | None = None,
+        completed: int | None = 100,
     ) -> None:
         outcome = reason.__class__.__name__.replace("Reason", "")
-
-        write_on_session_log(
-            self.download_info,
-            reason=reason,
-            outcome=outcome,
-        )
-
+        write_on_session_log(self.download_info, reason=reason, outcome=outcome)
         self.live_manager.update_task(
             self.download_info.task,
             completed=completed,

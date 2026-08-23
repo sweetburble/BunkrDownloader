@@ -17,44 +17,14 @@
 
 ## Dependencies
 
-- Python 3
+- Python 3.11+
 - `BeautifulSoup` (bs4) - for HTML parsing
 - `requests` - for HTTP requests
 - `rich` - for progress display in the terminal
 
-<details>
-
-<summary>Show directory structure</summary>
-
-```
-project-root/
-├── src/
-│ ├── crawlers/
-| | ├── api_utils.py         # Utilities for handling API requests and responses
-│ │ └── crawler_utils.py     # Utilities for extracting media download links
-│ ├── downloaders/
-│ │ ├── album_downloader.py  # Manages the downloading of entire albums
-│ │ ├── download_utils.py    # Utilities for managing the download process
-│ │ └── media_downloader.py  # Manages the downloading of individual media files
-│ ├── managers/
-│ │ ├── live_manager.py      # Manages a real-time live display
-│ │ ├── log_manager.py       # Manages real-time log updates
-│ │ ├── progress_manager.py  # Manages progress bars
-│ │ └── summary_manager.py   # Manages final summaries
-│ ├── bunkr_utils.py         # Utilities for checking Bunkr status
-│ ├── config.py              # Manages constants and settings used across the project
-│ ├── file_utils.py          # Utilities for managing file operations
-│ ├── general_utils.py       # Miscellaneous utility functions
-│ └── url_utils.py           # Utilities for Bunkr URLs
-├── downloader.py            # Module for initiating downloads from specified Bunkr URLs
-├── main.py                  # Main script to run the downloader
-├── URLs.txt                 # Text file listing album URLs to be downloaded
-└── session_log.txt          # Log file for recording session details
-```
-
-</details>
-
 ## Installation
+
+Open a terminal in the folder where you want to install the tool, then follow the steps below.
 
 1. Clone the repository:
 
@@ -88,9 +58,25 @@ python3 downloader.py <bunkr_url>
 
 You can either download an entire album or a specific file:
 
-```
+```bash
 python3 downloader.py https://bunkr.si/a/PUK068QE       # Download album
 python3 downloader.py https://bunkr.fi/f/gBrv5f8tAGlGW  # Download single media
+```
+
+## Preserve original filenames
+
+By default the downloader may generate filenames based on the URL. Use the `--clean-name` flag to preserve the original filename found on the item page.
+
+### Usage
+
+```bash
+python3 downloader.py <bunkr_url> --clean-name
+```
+
+### Dry-run example
+
+```bash
+python3 downloader.py --dry-run --clean-name <bunkr_url>
 ```
 
 ## Selective Download
@@ -166,16 +152,12 @@ python3 main.py
 If the `--custom-path <custom_path>` argument is used, the downloaded files will be saved in `<custom_path>/Downloads`.
 Otherwise, the files will be saved in a `Downloads` folder created within the script's directory
 
+Within that folder, each album gets its own `<album_title> (<album_id>)` subfolder. Use `--no-album-folder` to skip it and save the files directly into the download directory (`--no-download-folder` skips the `Downloads` folder itself; the two can be combined).
+
 ### Usage
 
 ```bash
 python3 main.py --custom-path <custom_path>
-```
-
-### Example
-
-```bash
-python3 main.py --custom-path /path/to/external/drive
 ```
 
 ## Disable UI for Notebooks
@@ -192,17 +174,10 @@ To disable the UI, use the following command:
 python3 main.py --disable-ui
 ```
 
-To download a single file or album without the UI, you can use this command:
-
-```bash
-python3 downloader.py <bunkr_url> --disable-ui
-```
-
 ## Maximum Number of Retries
 
-When the download fails, by default there is 5 retry attempts to download each media file again.
-You can control the number of maximum attempts with the `--max-retries` argument.
-It may be useful when you would like to skip broken media faster for the very large media collection.
+If a download fails, the downloader will retry up to 5 times by default.
+You can change the maximum number of retry attempts with the `--max-retries` argument.
 
 ### Usage
 
@@ -210,12 +185,6 @@ Allowed values: 0 (don't re-download) and larger.
 
 ```bash
 python3 downloader.py <bunkr_url> --max-retries 3
-```
-
-### Example:
-
-```bash
-python3 downloader.py https://bunkr.si/a/PUK068QE --max-retries 3
 ```
 
 ## Logging
